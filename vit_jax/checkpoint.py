@@ -191,7 +191,7 @@ def load_pretrained(*, pretrained_path, init_params, model_config):
       posemb_grid = posemb_grid.reshape(1, gs_new * gs_new, -1)
       posemb = jnp.array(np.concatenate([posemb_tok, posemb_grid], axis=1))
       restored_params['Transformer']['posembed_input']['pos_embedding'] = posemb
-  
+
   if version.parse(flax.__version__) >= version.parse('0.3.6'):
     restored_params = _fix_groupnorm(restored_params)
 

@@ -60,7 +60,7 @@ def get_directory_info(directory):
 
 def get_dataset_info(dataset, split):
   """Returns information about a dataset.
-  
+
   Args:
     dataset: Name of tfds dataset or directory -- see `./configs/common.py`
     split: Which split to return data for (e.g. "test", or "train"; tfds also
@@ -76,6 +76,9 @@ def get_dataset_info(dataset, split):
   directory = os.path.join(dataset, split)
   if os.path.isdir(directory):
     return get_directory_info(directory)
+  if ":" in dataset:
+    _, filter_labels = parse_dataset_name(dataset)
+    return {"num_classes": len(filter_labels)}
   return get_tfds_info(dataset, split)
 
 
@@ -96,6 +99,7 @@ def get_datasets(config):
         config=config, directory=train_dir, mode='train')
     ds_test = get_data_from_directory(
         config=config, directory=test_dir, mode='test')
+    # TODO: elif dataset is medical
   else:
     logging.info('Reading dataset from tfds "%s"', config.dataset)
     ds_train = get_data_from_tfds(config=config, mode='train')
@@ -135,10 +139,24 @@ def get_data_from_directory(*, config, directory, mode):
       preprocess=_pp)
 
 
+def parse_dataset_name(raw_dataset_name):
+  dataset_name, str_filter_labels = raw_dataset_name.split(":")
+  if "-" not in str_filter_labels:
+    filter_labels = [int(l) for l in str_filter_labels.split(",")]
+  else:
+    first, last = [int(l) for l in str_filter_labels.split("-")]
+    filter_labels = list(range(first, last))
+  return dataset_name, np.sort(filter_labels)
+
+
 def get_data_from_tfds(*, config, mode):
   """Returns dataset as read from tfds dataset `config.dataset`."""
+  if ":" in config.dataset:
+    dataset_name, filter_labels = parse_dataset_name(config.dataset)
+  else:
+    dataset_name, filter_labels = config.dataset, None
 
-  data_builder = tfds.builder(config.dataset, data_dir=config.tfds_data_dir)
+  data_builder = tfds.builder(dataset_name, data_dir=config.tfds_data_dir)
 
   data_builder.download_and_prepare(
       download_config=tfds.download.DownloadConfig(
@@ -150,11 +168,28 @@ def get_data_from_tfds(*, config, mode):
       shuffle_files=mode == 'train')
   image_decoder = data_builder.info.features['image'].decode_example
 
-  dataset_info = get_tfds_info(config.dataset, config.pp[mode])
+  dataset_info = get_tfds_info(dataset_name, config.pp[mode])
+  if filter_labels is not None:
+    dataset_info["num_classes"] = len(filter_labels)
+    del dataset_info["int2str"]
+
+  if filter_labels is not None:
+    def f_filter(x_y) -> bool:
+      y = x_y["label"]
+      return tf.math.count_nonzero(tf.equal(y, filter_labels)) > 0
+
+    def f_remap_labels(x_y):
+      y = x_y["label"]
+      y = tf.argmax(tf.equal(y, filter_labels), axis=-1)
+      return {"image": x_y["image"], "label": y}
+
+    # Filter and reindex labels.
+    data = data.filter(f_filter).map(f_remap_labels).cache()
+
   return get_data(
       data=data,
       mode=mode,
-      num_classes=dataset_info['num_classes'],
+      num_classes=dataset_info["num_classes"],
       image_decoder=image_decoder,
       repeats=None if mode == 'train' else 1,
       batch_size=config.batch_eval if mode == 'test' else config.batch,
@@ -249,3 +284,22 @@ def prefetch(dataset, n_prefetch):
   if n_prefetch:
     ds_iter = flax.jax_utils.prefetch_to_device(ds_iter, n_prefetch)
   return ds_iter
+
+
+def get_dataset_size(dataset):
+    if dataset is None:
+        return 0
+
+    size = 0
+    if len(dataset.element_spec) == 2:
+        for batch_X, batch_y in dataset:
+            y_shape = batch_y.shape
+            size += y_shape[0] if len(y_shape) > 0 else 1
+    elif len(dataset.element_spec) == 3:
+        for batch_X, batch_y, batch_weight in dataset:
+            y_shape = batch_y.shape
+            size += y_shape[0] if len(y_shape) > 0 else 1
+    else:
+        raise RuntimeError("Unexpected format for the tf dataset")
+    return size
+
