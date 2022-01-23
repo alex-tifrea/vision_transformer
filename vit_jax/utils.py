@@ -20,6 +20,9 @@ from absl import logging
 import jax
 import jax.numpy as jnp
 import tensorflow as tf
+import ml_collections
+import requests
+import time
 
 
 class GFileHandler(python_logging.StreamHandler):
@@ -117,3 +120,22 @@ def accumulate_gradient(loss_and_grad_fn, params, images, labels, accum_steps):
     return jax.tree_map(lambda x: x / accum_steps, (l, g))
   else:
     return loss_and_grad_fn(params, images, labels)
+
+def flatten_config_dict(d, parent_key='', sep='_'):
+    items = []
+    for k, v in d.items():
+        new_key = parent_key + sep + k if parent_key else k
+        if isinstance(v, ml_collections.config_dict.config_dict.ConfigDict):
+            items.extend(flatten_config_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+def retry(f):
+    while True:
+        try:
+            return f()
+        except requests.exceptions.ProxyError:
+            print("Retrying MLFlow...")
+            time.sleep(3)
+            continue

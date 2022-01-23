@@ -32,7 +32,9 @@ from vit_jax import input_pipeline
 from vit_jax import models
 from vit_jax import momentum_clip
 from vit_jax import utils
+from vit_jax.utils import retry
 
+import mlflow
 
 def make_update_fn(*, apply_fn, accum_steps, lr_fn):
   """Returns update step for data parallel training."""
@@ -112,6 +114,10 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
       filename = best.filename
       logging.info('Selected fillename="%s" for "%s" with final_val=%.3f',
                    filename, model_or_filename, best.final_val)
+      retry(lambda: mlflow.log_params({
+        "pretrained_ckpt_filename": filename,
+        "pretrained_ckpt_val": best.final_val,
+      }))
     pretrained_path = os.path.join(config.pretrained_dir,
                                    f'{config.model.name}.npz')
   else:
@@ -232,6 +238,13 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
               lr=lr,
               img_sec_core_test=img_sec_core_test))
 
+      mlflow_metrics = {
+        "lr": lr,
+        "test_acc": accuracy_test,
+        "img/sec/core": img_sec_core_test,
+      }
+      retry(lambda: mlflow.log_metrics(mlflow_metrics, step=step))
+
     # Store checkpoint.
     if ((config.checkpoint_every and step % config.eval_every == 0) or
         step == total_steps):
@@ -239,5 +252,8 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
           workdir, (flax.jax_utils.unreplicate(opt_repl), step), step)
       logging.info('Stored checkpoint at step %d to "%s"', step,
                    checkpoint_path)
+  retry(lambda: mlflow.log_params({
+    "finetuned_ckpt_path": checkpoint_path,
+  }))
 
   return flax.jax_utils.unreplicate(opt_repl)

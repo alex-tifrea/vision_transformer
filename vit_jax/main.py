@@ -23,6 +23,15 @@ import tensorflow as tf
 from vit_jax import inference_time
 from vit_jax import train
 from vit_jax import utils
+from vit_jax.utils import retry
+
+import mlflow
+import os
+
+os.environ["MLFLOW_TRACKING_USERNAME"] = "exp-01.mlflow-yang.tifreaa"
+os.environ["MLFLOW_TRACKING_PASSWORD"] = "parola"
+remote_server_uri = "https://exp-01.mlflow-yang.inf.ethz.ch"
+mlflow.set_tracking_uri(remote_server_uri)
 
 
 FLAGS = flags.FLAGS
@@ -57,6 +66,14 @@ def main(argv):
   logging.info('Using JAX XLA backend %s', jax_xla_backend)
 
   logging.info('Config: %s', FLAGS.config)
+
+  retry(lambda: mlflow.set_experiment("vit_finetuning"))
+  curr_run = retry(lambda: mlflow.start_run(run_name=f"{FLAGS.config.dataset}_{FLAGS.config.total_steps}"))
+
+  mlflow_params = utils.flatten_config_dict(FLAGS.config, sep=".")
+  mlflow_params["run_id"] = curr_run.info.run_id
+  mlflow_params["workdir"] = _WORKDIR.value
+  retry(lambda: mlflow.log_params(mlflow_params))
 
   # Add a note so that we can tell which task is which JAX host.
   # (Depending on the platform task 0 is not guaranteed to be host 0)
