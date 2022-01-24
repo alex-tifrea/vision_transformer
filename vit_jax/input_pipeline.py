@@ -22,6 +22,8 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
+from medical_ood import lib_medical_ood
+
 import sys
 if sys.platform != 'darwin':
   # A workaround to avoid crash because tfds may open to many files.
@@ -79,6 +81,8 @@ def get_dataset_info(dataset, split):
   if ":" in dataset:
     _, filter_labels = parse_dataset_name(dataset)
     return {"num_classes": len(filter_labels)}
+  if lib_medical_ood.is_medical(dataset):
+    return {"num_classes": 2}
   return get_tfds_info(dataset, split)
 
 
@@ -99,13 +103,34 @@ def get_datasets(config):
         config=config, directory=train_dir, mode='train')
     ds_test = get_data_from_directory(
         config=config, directory=test_dir, mode='test')
-    # TODO: elif dataset is medical
+  elif lib_medical_ood.is_medical(config.dataset):
+    logging.info('Reading medical dataset "%s"', config.dataset)
+    ds_train = get_medical_data(config=config, mode='train')
+    ds_test = get_medical_data(config=config, mode='test')
   else:
     logging.info('Reading dataset from tfds "%s"', config.dataset)
     ds_train = get_data_from_tfds(config=config, mode='train')
     ds_test = get_data_from_tfds(config=config, mode='test')
 
   return ds_train, ds_test
+
+
+def get_medical_data(config, mode):
+  data = lib_medical_ood.load_dataset(config.dataset, mode)
+
+  def _pp(X, y):
+    return dict(image=X, label=y,)
+
+  return get_data(
+      data=data,
+      mode=mode,
+      num_classes=2,
+      image_decoder=lambda image: image,  # images are already decoded.
+      repeats=None if mode == 'train' else 1,
+      batch_size=config.batch_eval if mode == 'test' else config.batch,
+      image_size=config.pp['crop'],
+      shuffle_buffer=config.shuffle_buffer,
+      preprocess=_pp)
 
 
 def get_data_from_directory(*, config, directory, mode):
@@ -167,13 +192,12 @@ def get_data_from_tfds(*, config, mode):
       decoders={'image': tfds.decode.SkipDecoding()},
       shuffle_files=mode == 'train')
   image_decoder = data_builder.info.features['image'].decode_example
-
   dataset_info = get_tfds_info(dataset_name, config.pp[mode])
+
   if filter_labels is not None:
     dataset_info["num_classes"] = len(filter_labels)
     del dataset_info["int2str"]
 
-  if filter_labels is not None:
     def f_filter(x_y) -> bool:
       y = x_y["label"]
       return tf.math.count_nonzero(tf.equal(y, filter_labels)) > 0

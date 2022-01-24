@@ -15,6 +15,7 @@
 from typing import Any, Dict, Iterable, Tuple, Union
 
 import ml_collections
+from medical_ood.lib_medical_ood import is_medical
 
 
 def get_config():
@@ -104,6 +105,13 @@ DATASET_PRESETS = {
               'test': 'validation',
               'crop': 384})
          }),
+    'medical': ml_collections.ConfigDict(
+        {'total_steps': 2_000,
+         'pp': ml_collections.ConfigDict(
+             {'train': 'train[:99%]',
+              'test': 'test',
+              'crop': 224})
+         }),
 }
 
 
@@ -111,7 +119,7 @@ def with_dataset(config: ml_collections.ConfigDict,
                  dataset: str) -> ml_collections.ConfigDict:
   config = ml_collections.ConfigDict(config.to_dict())
   config.dataset = dataset
-  config.update(DATASET_PRESETS[dataset])
+  config.update(DATASET_PRESETS["medical" if is_medical(dataset) else dataset])
   return config
 
 
